@@ -692,6 +692,51 @@ class VPhoneControl {
         }
     }
 
+    // MARK: - Proxy
+
+    struct ProxyGuestState {
+        let enabled: Bool
+        let host: String?
+        let port: Int?
+        let exceptions: [String]
+    }
+
+    /// Configure the guest system-wide HTTP proxy. In vsock mode the guest
+    /// proxies to a vphoned loopback forwarder (127.0.0.1) that tunnels to
+    /// the host relay over virtio-vsock — used when the host firewall blocks
+    /// inbound bridge TCP. Otherwise the guest proxies to its default-route
+    /// gateway (the host relay) directly; `gateway` (host's vmnet NAT IP)
+    /// enables static fallback when DHCP is unavailable. Returns the proxy
+    /// host the guest configured and, when reported, the guest's source IP.
+    func sendProxySet(
+        port: Int, exceptions: [String], gateway: String? = nil, vsock: Bool = false
+    ) async throws -> (host: String, guestIP: String?) {
+        var req: [String: Any] = ["t": "proxy_set", "port": port, "exceptions": exceptions, "vsock": vsock]
+        if let gateway { req["gateway"] = gateway }
+        let (resp, _) = try await sendRequest(req)
+        guard resp["ok"] as? Bool == true, let host = resp["host"] as? String else {
+            throw ControlError.guestError(resp["msg"] as? String ?? "proxy_set failed")
+        }
+        return (host, resp["guest_ip"] as? String)
+    }
+
+    func sendProxyClear() async throws {
+        let (resp, _) = try await sendRequest(["t": "proxy_clear"] as [String: Any])
+        guard resp["ok"] as? Bool == true else {
+            throw ControlError.guestError(resp["msg"] as? String ?? "proxy_clear failed")
+        }
+    }
+
+    func sendProxyGet() async throws -> ProxyGuestState {
+        let (resp, _) = try await sendRequest(["t": "proxy_get"] as [String: Any])
+        return ProxyGuestState(
+            enabled: resp["enabled"] as? Bool ?? false,
+            host: resp["host"] as? String,
+            port: resp["port"] as? Int,
+            exceptions: resp["exceptions"] as? [String] ?? []
+        )
+    }
+
     // MARK: - Accessibility
 
     func accessibilityTree(depth: Int = -1) async throws -> [String: Any] {
@@ -920,7 +965,8 @@ class VPhoneControl {
         case "file_get", "file_put", "ipa_install":
             transferRequestTimeout
         case "devmode", "file_list", "file_delete", "file_rename", "file_mkdir", "keychain_list",
-             "app_list", "app_launch", "open_url", "accessibility_tree":
+             "app_list", "app_launch", "open_url", "accessibility_tree", "proxy_set", "proxy_clear",
+             "proxy_get":
             slowRequestTimeout
         default:
             defaultRequestTimeout

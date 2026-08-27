@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import VPhoneCore
 
 // MARK: - Menu Controller
 
@@ -35,6 +36,13 @@ class VPhoneMenuController {
     var locationReplayStopItem: NSMenuItem?
     var screenRecorder: VPhoneScreenRecorder?
     var recordingItem: NSMenuItem?
+    var proxyRelay: VPhoneProxyRelay?
+    var proxyConfig: VPhoneProxyConfig?
+    var proxyUpstreamItem: NSMenuItem?
+    var proxyRelayItem: NSMenuItem?
+    var proxyGuestStatusItem: NSMenuItem?
+    var proxyApplyItem: NSMenuItem?
+    var proxyClearItem: NSMenuItem?
     var cameraServer: VPhoneCameraServer?
     var cameraStatusItem: NSMenuItem?
     var cameraSourceOffItem: NSMenuItem?

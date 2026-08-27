@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Virtualization
+import VPhoneCore
 
 class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private let cli: VPhoneBootCLI
@@ -15,6 +16,9 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
     private var hostControl: VPhoneHostControl?
     private var cameraServer: VPhoneCameraServer?
     private var sigintSource: DispatchSourceSignal?
+    private var proxyRelay: VPhoneProxyRelay?
+    private var proxyConfig: VPhoneProxyConfig?
+    private var proxyVsockListener: VPhoneProxyVsockListener?
     private var didAttemptAutoInstall = false
 
     init(cli: VPhoneBootCLI) {
@@ -73,6 +77,8 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
         print("  rom             : \(options.sepRomURL?.path ?? "None")")
         print("")
 
+        try startProxyIfNeeded()
+
         let vm = try VPhoneVirtualMachine(options: options)
         self.vm = vm
 
@@ -95,6 +101,11 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             if let device = vm.virtualMachine.socketDevices.first as? VZVirtioSocketDevice {
                 control.connect(device: device)
                 camServer.connect(device: device)
+                if let relay = proxyRelay {
+                    let vsockListener = VPhoneProxyVsockListener(relay: relay)
+                    vsockListener.attach(to: device)
+                    proxyVsockListener = vsockListener
+                }
             }
         }
 
@@ -151,6 +162,9 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
             let recorder = VPhoneScreenRecorder()
             mc.screenRecorder = recorder
             menuController = mc
+            mc.proxyRelay = proxyRelay
+            mc.proxyConfig = proxyConfig
+            mc.refreshProxyInfo()
 
             let socketPath = options.configURL
                 .deletingLastPathComponent()
@@ -173,6 +187,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 mc?.updateURLAvailability(available: caps.contains("url"))
                 mc?.updateClipboardAvailability(available: caps.contains("clipboard"))
                 mc?.updateSettingsAvailability(available: true)
+                mc?.updateProxyAvailability(available: caps.contains("proxy"))
                 if caps.contains("location") {
                     mc?.updateLocationCapability(available: true)
                     // Auto-resume if user had toggle on
@@ -186,6 +201,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 mc?.syncLowPowerModeFromHost()
                 Task { @MainActor [weak self] in
                     await self?.installPackageIfRequested(caps: caps)
+                    await self?.applyProxyToGuest(caps: caps)
                 }
             }
             control.onDisconnect = { [weak mc, weak provider = locationProvider] in
@@ -195,6 +211,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 mc?.updateURLAvailability(available: false)
                 mc?.updateClipboardAvailability(available: false)
                 mc?.updateSettingsAvailability(available: false)
+                mc?.updateProxyAvailability(available: false)
                 provider?.stopReplay()
                 provider?.stopForwarding()
                 mc?.updateLocationCapability(available: false)
@@ -209,12 +226,57 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
                 }
                 Task { @MainActor [weak self] in
                     await self?.installPackageIfRequested(caps: caps)
+                    await self?.applyProxyToGuest(caps: caps)
                 }
             }
             control.onDisconnect = { [weak provider = locationProvider] in
                 provider?.stopReplay()
                 provider?.stopForwarding()
             }
+        }
+    }
+
+    @MainActor
+    private func startProxyIfNeeded() throws {
+        guard let cliProxy = cli.proxy else { return }
+        guard let config = try VPhoneProxyConfig.resolve(
+            cliValue: cliProxy, environment: ProcessInfo.processInfo.environment
+        ) else { return }
+
+        let relay = VPhoneProxyRelay(config: config)
+        do {
+            try relay.start()
+        } catch {
+            print("[proxy] relay failed to start (\(error)) — proxy disabled")
+            return
+        }
+        print("[proxy] relay :\(relay.port), upstream \(config.summary)")
+        proxyConfig = config
+        proxyRelay = relay
+    }
+
+    @MainActor
+    private func applyProxyToGuest(caps: [String]) async {
+        guard let relay = proxyRelay, let config = proxyConfig, let control else { return }
+        if let ip = control.guestIP {
+            relay.updateAllowedIPs([ip])
+        }
+        guard caps.contains("proxy") else {
+            print("[proxy] guest does not support proxy capability")
+            return
+        }
+        do {
+            let gateway = VPhoneProxyRelay.hostBridgeGateway()
+            let result = try await control.sendProxySet(
+                port: Int(relay.port), exceptions: config.exceptions,
+                gateway: gateway,
+                vsock: proxyVsockListener != nil)
+            if let guestIP = result.guestIP {
+                relay.updateAllowedIPs([guestIP])
+            }
+            print("[proxy] guest proxy -> \(result.host):\(relay.port) via \(config.summary)")
+        } catch {
+            print("[proxy] failed to apply guest proxy: \(error)")
         }
     }
 
@@ -256,6 +318,7 @@ class VPhoneAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_: Notification) {
         hostControl?.stop()
+        proxyRelay?.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {

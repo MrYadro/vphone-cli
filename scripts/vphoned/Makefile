@@ -21,7 +21,8 @@ $(OUT): $(SRCS) $(wildcard *.h)
 		-lsqlite3 \
 		-framework Foundation \
 		-framework Security \
-		-framework CoreServices
+		-framework CoreServices \
+		-framework SystemConfiguration
 	@echo "  built OK"
 
 clean:

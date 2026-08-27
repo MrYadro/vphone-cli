@@ -64,6 +64,16 @@ struct VPhoneBootCLI: ParsableCommand {
     @Flag(name: .customLong("no-vphoned"), help: "Exclude vphoned usage (patchless-only).")
     var noVphoned: Bool = false
 
+    @Option(
+        help: """
+        Proxy the guest through a host-side relay. Use 'env' to read \
+        http_proxy/https_proxy/all_proxy (and no_proxy) from the environment, \
+        or an upstream URL like http://proxy.corp:8080 or socks5://127.0.0.1:1080. \
+        Omit to leave the guest network untouched.
+        """
+    )
+    var proxy: String?
+
     /// DFU mode is always headless.
     var noGraphics: Bool {
         dfu || headless
@@ -78,6 +88,15 @@ struct VPhoneBootCLI: ParsableCommand {
             throw ValidationError(
                 "`--install-ipa` is unavailable with `--dfu` because DFU mode does not start the guest control channel: \(packageURL.path)"
             )
+        }
+
+        if let proxy, proxy != "env" {
+            do {
+                _ = try VPhoneProxyConfig.parseUpstream(proxy)
+            } catch {
+                throw ValidationError(
+                    "`--proxy` must be 'env' or a URL (http:// or socks5://), got: \(proxy)")
+            }
         }
 
         guard let packageURL = installPackageURL else { return }

@@ -35,6 +35,7 @@
 #import "vphoned_location.h"
 #import "vphoned_notify.h"
 #import "vphoned_protocol.h"
+#import "vphoned_proxy.h"
 #import "vphoned_settings.h"
 #import "vphoned_url.h"
 #import "vphoned_vcam.h"
@@ -339,6 +340,7 @@ static BOOL handle_client(int fd) {
       [caps addObject:@"apps"];
     [caps addObject:@"url"];
     [caps addObject:@"settings"];
+    [caps addObject:@"proxy"];
     [caps addObject:@"touch"];
 
     NSMutableDictionary *helloResp = [@{
@@ -432,6 +434,14 @@ static BOOL handle_client(int fd) {
         // Settings operations
         if ([t hasPrefix:@"settings_"]) {
           NSDictionary *resp = vp_handle_settings_command(msg);
+          if (resp && !vp_write_message(fd, resp))
+            break;
+          continue;
+        }
+
+        // Proxy configuration
+        if ([t hasPrefix:@"proxy_"]) {
+          NSDictionary *resp = vp_handle_proxy_command(msg);
           if (resp && !vp_write_message(fd, resp))
             break;
           continue;

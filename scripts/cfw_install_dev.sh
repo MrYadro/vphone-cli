@@ -463,7 +463,8 @@ if [[ "$needs_vphoned_build" == "1" ]]; then
         -lsqlite3 \
         -framework Foundation \
         -framework Security \
-        -framework CoreServices
+        -framework CoreServices \
+        -framework SystemConfiguration
 fi
 cp "$VPHONED_BIN" "$TEMP_DIR/vphoned"
 ldid_sign_ent "$TEMP_DIR/vphoned" "$VPHONED_SRC/entitlements.plist"

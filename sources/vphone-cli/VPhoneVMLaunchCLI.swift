@@ -14,10 +14,30 @@ struct VPhoneVMLaunchCommand: ParsableCommand {
     @Flag(name: .customLong("no-vphoned"), help: "Do not stage/use vphoned") var noVphoned = false
     @Option(help: "Kernel GDB debug stub port on host (omit for system-assigned; valid: 6000...65535)")
     var kernelDebugPort: Int?
+    @Option(
+        help: """
+        Proxy the guest through a host-side relay. Use 'env' to read \
+        http_proxy/https_proxy/all_proxy (and no_proxy) from the environment, \
+        or an upstream URL like http://proxy.corp:8080 or socks5://127.0.0.1:1080. \
+        Omit to leave the guest network untouched.
+        """
+    )
+    var proxy: String?
     @Option(name: .shortAndLong, help: "Resource base override (default: inferred from the running binary path)")
     var projectRoot: String?
     @Flag(name: .customShort("v"), help: "Increase verbosity: -v tool detail, -vv guest serial, -vvv internal trace")
     var verboseCount: Int
+
+    mutating func validate() throws {
+        if let proxy, proxy != "env" {
+            do {
+                _ = try VPhoneProxyConfig.parseUpstream(proxy)
+            } catch {
+                throw ValidationError(
+                    "`--proxy` must be 'env' or a URL (http:// or socks5://), got: \(proxy)")
+            }
+        }
+    }
 
     func run() throws {
         let v = VPhoneVerbosity(count: verboseCount)
@@ -66,6 +86,7 @@ struct VPhoneVMLaunchCommand: ParsableCommand {
         if let variant { args += ["--variant", variant] }
         if noVphoned { args.append("--no-vphoned") }
         if let kernelDebugPort { args += ["--kernel-debug-port", String(kernelDebugPort)] }
+        if let proxy { args += ["--proxy", proxy] }
 
         if v.tracesInternals {
             print("[trace] spawning: \(bootBinary.path) \(args.joined(separator: " "))")

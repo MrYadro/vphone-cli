@@ -1,4 +1,5 @@
 import AppKit
+import VPhoneCore
 
 // MARK: - Connect Menu
 
@@ -66,6 +67,7 @@ extension VPhoneMenuController {
         menu.addItem(buildLocationSubmenu())
         menu.addItem(buildBatterySubmenu())
         menu.addItem(buildCameraSubmenu())
+        menu.addItem(buildProxySubmenu())
 
         item.submenu = menu
         return item
@@ -402,5 +404,108 @@ extension VPhoneMenuController {
 
         NSApp.runModal(for: panel)
         panel.orderOut(nil)
+    }
+
+    // MARK: - Proxy
+
+    func buildProxySubmenu() -> NSMenuItem {
+        let item = NSMenuItem(title: "Proxy", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "Proxy")
+        menu.autoenablesItems = false
+
+        let upstream = NSMenuItem(
+            title: "Upstream: \(proxyConfig?.summary ?? "off")", action: nil, keyEquivalent: "")
+        upstream.isEnabled = false
+        proxyUpstreamItem = upstream
+        menu.addItem(upstream)
+
+        let relayItem = NSMenuItem(
+            title: proxyRelay.map { "Relay: :\($0.port)" } ?? "Relay: off", action: nil,
+            keyEquivalent: "")
+        relayItem.isEnabled = false
+        proxyRelayItem = relayItem
+        menu.addItem(relayItem)
+
+        let status = makeItem("Guest: unknown", action: #selector(proxyGuestStatus))
+        status.isEnabled = false
+        proxyGuestStatusItem = status
+        menu.addItem(status)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let apply = makeItem("Apply from Host Config", action: #selector(proxyApply))
+        apply.isEnabled = false
+        proxyApplyItem = apply
+        menu.addItem(apply)
+
+        let clear = makeItem("Clear in Guest", action: #selector(proxyClear))
+        clear.isEnabled = false
+        proxyClearItem = clear
+        menu.addItem(clear)
+
+        item.submenu = menu
+        return item
+    }
+
+    func refreshProxyInfo() {
+        proxyUpstreamItem?.title = "Upstream: \(proxyConfig?.summary ?? "off")"
+        proxyRelayItem?.title = proxyRelay.map { "Relay: :\($0.port)" } ?? "Relay: off"
+    }
+
+    func updateProxyAvailability(available: Bool) {
+        refreshProxyInfo()
+        proxyGuestStatusItem?.isEnabled = available
+        proxyApplyItem?.isEnabled = available && proxyRelay != nil
+        proxyClearItem?.isEnabled = available
+    }
+
+    @objc func proxyGuestStatus() {
+        Task { @MainActor in
+            do {
+                let state = try await control.sendProxyGet()
+                let detail = state.enabled
+                    ? "on (\(state.host ?? "?"):\(state.port.map(String.init) ?? "?"))"
+                    : "off"
+                proxyGuestStatusItem?.title = "Guest: \(detail)"
+                showAlert(title: "Guest Proxy", message: "Guest proxy is \(detail).", style: .informational)
+            } catch {
+                showAlert(title: "Guest Proxy", message: "\(error)", style: .warning)
+            }
+        }
+    }
+
+    @objc func proxyApply() {
+        Task { @MainActor in
+            guard let relay = proxyRelay, let config = proxyConfig else {
+                showAlert(title: "Proxy", message: "No host proxy config (start with --proxy).", style: .warning)
+                return
+            }
+            do {
+                let result = try await control.sendProxySet(
+                    port: Int(relay.port), exceptions: config.exceptions, vsock: true)
+                if let guestIP = result.guestIP {
+                    relay.updateAllowedIPs([guestIP])
+                }
+                proxyGuestStatusItem?.title = "Guest: on (\(result.host):\(relay.port))"
+                showAlert(
+                    title: "Proxy",
+                    message: "Guest proxy set to \(result.host):\(relay.port) via \(config.summary).",
+                    style: .informational)
+            } catch {
+                showAlert(title: "Proxy", message: "\(error)", style: .warning)
+            }
+        }
+    }
+
+    @objc func proxyClear() {
+        Task { @MainActor in
+            do {
+                try await control.sendProxyClear()
+                proxyGuestStatusItem?.title = "Guest: off"
+                showAlert(title: "Proxy", message: "Guest proxy cleared.", style: .informational)
+            } catch {
+                showAlert(title: "Proxy", message: "\(error)", style: .warning)
+            }
+        }
     }
 }
